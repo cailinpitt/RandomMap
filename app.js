@@ -1,31 +1,25 @@
-import fs from 'fs-extra'
-import axios from 'axios'
-import path from 'path'
-import randomFloat from 'random-float'
-import emoji from 'node-emoji'
-import GoogleMapsAPI from 'googlemaps'
-import { AtpAgent } from '@atproto/api'
+const fs = require('fs-extra')
+const axios = require('axios')
+const path = require('path')
+const randomFloat = require('random-float')
+const emoji = require('node-emoji')
+const GoogleMapsAPI = require('googlemaps')
+const { AtpAgent } = require('@atproto/api')
 
-import { google, bluesky } from './keys.js'
-import {
+const { google, bluesky } = require('./keys.js')
+const {
   cleanup,
   getRandomInt,
   getRandomIntInRange,
   makePost,
-} from './util.js'
+} = require('./util.js')
 
 const agent = new AtpAgent({
   service: bluesky.service,
 })
 
-await agent.login({
-  identifier: bluesky.identifier,
-  password: bluesky.password,
-})
-
 const gmAPI = new GoogleMapsAPI(google)
 const assetDirectory = './assets/'
-
 
 const chooseContinent = () => {
   let center
@@ -76,8 +70,8 @@ const downloadMap = async (center, maptype, zoom, imagePath) => {
     center,
     zoom,
     maptype,
-    size: '4000x4000',
-    scale: 2,
+    size: '1024x1024',
+    scale: 1,
   }
 
   const imageURL = gmAPI.staticMap(imageParams)
@@ -122,6 +116,11 @@ const post = async (status) => {
 }
 
 const run = async () => {
+  await agent.login({
+    identifier: bluesky.identifier,
+    password: bluesky.password,
+  })
+
   fs.ensureDirSync(assetDirectory)
 
   const imageInfo = chooseContinent()
