@@ -1,64 +1,74 @@
-const axios = require('axios');
-const fs = require('fs-extra');
-const GoogleMapsAPI = require('googlemaps');
-const emoji = require('node-emoji');
-const path = require('path');
-const randomFloat = require('random-float');
+import fs from 'fs-extra'
+import axios from 'axios'
+import path from 'path'
+import randomFloat from 'random-float'
+import emoji from 'node-emoji'
+import GoogleMapsAPI from 'googlemaps'
+import { AtpAgent } from '@atproto/api'
 
-const { google } = require('./keys.js');
-const {
+import { google, bluesky } from './keys.js'
+import {
   cleanup,
   getRandomInt,
   getRandomIntInRange,
   makePost,
-} = require('./util.js');
+} from './util.js'
 
-const gmAPI = new GoogleMapsAPI(google);
+const agent = new AtpAgent({
+  service: bluesky.service,
+})
 
-const assetDirectory = './assets/';
+await agent.login({
+  identifier: bluesky.identifier,
+  password: bluesky.password,
+})
+
+const gmAPI = new GoogleMapsAPI(google)
+const assetDirectory = './assets/'
+
 
 const chooseContinent = () => {
-  let center;
-  const continent = getRandomInt(5);
-  let status = "Somewhere in";
+  let center
+  const continent = getRandomInt(5)
+  let status = 'Somewhere in'
 
   switch (continent) {
     case 0:
-      center = "" + randomFloat(30.208889, 50.0) + ", " + randomFloat(-118.733056, -76.620833);
-      status = status + " North America";
-      break;
+      center = `${randomFloat(30.2, 50)}, ${randomFloat(-118.7, -76.6)}`
+      status += ' North America'
+      break
     case 1:
-      center = "" + randomFloat(-13.896389, 1.458611) + ", " + randomFloat(-75.328611, -39.793056);
-      status = status + " South America";
-      break;
+      center = `${randomFloat(-13.9, 1.4)}, ${randomFloat(-75.3, -39.7)}`
+      status += ' South America'
+      break
     case 2:
-      center = "" + randomFloat(-19.981944, 21.346983) + ", " + randomFloat(14.4467, 34.25);
-      status = status + " Africa";
-      break;
+      center = `${randomFloat(-19.9, 21.3)}, ${randomFloat(14.4, 34.2)}`
+      status += ' Africa'
+      break
     case 3:
-      center = "" + randomFloat(43.0042, 48.0) + ", " + randomFloat(2.500556, 44.618056);
-      status = status + " Europe";
-      break;
+      center = `${randomFloat(43.0, 48)}, ${randomFloat(2.5, 44.6)}`
+      status += ' Europe'
+      break
     case 4:
-      center = "" + randomFloat(21.2661, 49.7333) + ", " + randomFloat(70.0, 106.0);
-      status = status + " Asia";
-      break;
+      center = `${randomFloat(21.2, 49.7)}, ${randomFloat(70, 106)}`
+      status += ' Asia'
+      break
     default:
-      center = "" + randomFloat(-31.643611, -20.6833) + ", " + randomFloat(116.155, 145.277736);
-      status = status + " Australia";
+      center = `${randomFloat(-31.6, -20.6)}, ${randomFloat(116.1, 145.2)}`
+      status += ' Australia'
   }
 
-  status += '\n\n' + center + '\n\n' + 
+  status +=
+    '\n\n' +
+    center +
+    '\n\n' +
     emoji.random().emoji + ' ' +
     emoji.random().emoji + ' ' +
     emoji.random().emoji + ' ' +
     emoji.random().emoji + ' ' +
-    emoji.random().emoji;
+    emoji.random().emoji
 
-    return {
-      center,
-      status
-    };
+  return { center, status }
 }
 
 const downloadMap = async (center, maptype, zoom, imagePath) => {
@@ -66,57 +76,63 @@ const downloadMap = async (center, maptype, zoom, imagePath) => {
     center,
     zoom,
     maptype,
-    size: '2000x2000',
+    size: '4000x4000',
     scale: 2,
-  };
+  }
 
-  const imageURL = gmAPI.staticMap(imageParams);
-
-  const image = path.resolve(__dirname, imagePath);
-
-  const writer = fs.createWriteStream(image);
+  const imageURL = gmAPI.staticMap(imageParams)
+  const image = path.resolve(imagePath)
 
   const response = await axios({
     url: imageURL,
     method: 'GET',
-    responseType: 'stream'
-  });
+    responseType: 'arraybuffer',
+  })
 
-  return new Promise(resolve => response.data.pipe(writer).on('finish', resolve));
+  await fs.writeFile(image, response.data)
 }
 
-const upload = (media_data) => makePost('media/upload', {
-  media_data
-}).then(data => data.media_id_string);
+const uploadImage = async (imagePath) => {
+  const buffer = fs.readFileSync(imagePath)
 
-const makeStatusUpdate = (media_ids, status) => makePost('statuses/update', {
-  status,
-  media_ids
-});
+  const { data } = await agent.uploadBlob(buffer, {
+    encoding: 'image/png',
+  })
 
-const tweet = async (status) => {
-  const media_ids = [];
-  const satellite = fs.readFileSync(assetDirectory + 'satellite.png', { encoding: 'base64' });
-  const terrain = fs.readFileSync(assetDirectory + 'terrain.png', { encoding: 'base64' });
+  return {
+    image: data.blob,
+    alt: 'Map image',
+  }
+}
 
-  media_ids.push(await upload(satellite));
-  media_ids.push(await upload(terrain));
+const post = async (status) => {
+  const images = []
 
-  await makeStatusUpdate(media_ids.toString(), status);
+  images.push(await uploadImage(assetDirectory + 'satellite.png'))
+  images.push(await uploadImage(assetDirectory + 'terrain.png'))
+
+  await makePost(agent, {
+    text: status,
+    embed: {
+      $type: 'app.bsky.embed.images',
+      images,
+    },
+    createdAt: new Date().toISOString(),
+  })
 }
 
 const run = async () => {
-  fs.ensureDirSync(assetDirectory);
+  fs.ensureDirSync(assetDirectory)
 
-  const imageInfo = chooseContinent();
-  const zoom = getRandomIntInRange(11, 15);
+  const imageInfo = chooseContinent()
+  const zoom = getRandomIntInRange(11, 15)
 
-  await downloadMap(imageInfo.center, 'satellite', zoom, assetDirectory + 'satellite.png');
-  await downloadMap(imageInfo.center, 'terrain', zoom, assetDirectory + 'terrain.png');
+  await downloadMap(imageInfo.center, 'satellite', zoom, assetDirectory + 'satellite.png')
+  await downloadMap(imageInfo.center, 'terrain', zoom, assetDirectory + 'terrain.png')
 
-  tweet(imageInfo.status);
+  await post(imageInfo.status)
 
-  cleanup(assetDirectory);
+  cleanup(assetDirectory)
 }
 
-run();
+run().catch(console.error)
