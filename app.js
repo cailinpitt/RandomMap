@@ -32,7 +32,7 @@ const CONTINENTS = [
       { lat: [43, 60], lon: [-130, -60], weight: 2 }, // Canada
       { lat: [15, 25], lon: [-100, -75], weight: 1 }, // Central America
     ],
-    emojis: ['🌎', '🍔', '🏈', '🍿', '🐕'],
+    emojis: ['🌎', '🍔', '🏈', '🍿', '🐕', '🦅', '🌲', '🏔️', '🦬', '🌵'],
   },
   {
     name: 'South America',
@@ -40,7 +40,7 @@ const CONTINENTS = [
       { lat: [-35, 5], lon: [-75, -35], weight: 4 }, // Brazil / Andes coast
       { lat: [-55, -15], lon: [-75, -60], weight: 1 }, // Patagonia
     ],
-    emojis: ['🌎', '⚽️', '🏊', '🌮', '🌯',],
+    emojis: ['🌎', '⚽️', '🏊', '🌮', '🌯', '🦜', '☕', '🦙', '🌴', '🐆'],
   },
   {
     name: 'Europe',
@@ -49,7 +49,7 @@ const CONTINENTS = [
       { lat: [55, 70], lon: [10, 40], weight: 2 }, // Scandinavia
       { lat: [45, 55], lon: [30, 60], weight: 1 }, // Eastern Europe
     ],
-    emojis: ['🌍', '⚽️', '💶', '🚲', '🍝'],
+    emojis: ['🌍', '⚽️', '💶', '🚲', '🍝', '🏰', '🍺', '🎨', '⚓', '🧀'],
   },
   {
     name: 'Africa',
@@ -58,7 +58,7 @@ const CONTINENTS = [
       { lat: [5, 35], lon: [-10, 35], weight: 3 }, // North / West Africa
       { lat: [-5, 15], lon: [35, 50], weight: 1 }, // Horn of Africa
     ],
-    emojis: ['🌍', '🐘', '🦒', '🌊', '🍗'],
+    emojis: ['🌍', '🐘', '🦒', '🌊', '🍗', '🦁', '🦓', '🌅', '🥁', '🦏'],
   },
   {
     name: 'Asia',
@@ -67,7 +67,7 @@ const CONTINENTS = [
       { lat: [10, 30], lon: [70, 90], weight: 3 }, // India / SE Asia
       { lat: [40, 60], lon: [60, 100], weight: 1 }, // Central Asia
     ],
-    emojis: ['🌏', '🚄', '🍜', '🥟'],
+    emojis: ['🌏', '🚄', '🍜', '🥟', '🏯', '🐼', '🍛', '🎎', '🐅'],
   },
   {
     name: 'Australia',
@@ -75,14 +75,14 @@ const CONTINENTS = [
       { lat: [-38, -12], lon: [113, 153], weight: 4 }, // Coastal AU
       { lat: [-30, -20], lon: [120, 135], weight: 1 }, // Interior
     ],
-    emojis: ['🐨', '🦘', '🌏', '♨️', '🏜️'],
+    emojis: ['🐨', '🦘', '🌏', '♨️', '🏜️', '🪃', '🦎', '🏖️', '🐊', '🌊'],
   },
   {
     name: 'Antarctica',
     boxes: [
       { lat: [-90, -65], lon: [-180, 180], weight: 1 },
     ],
-    emojis: ['🧊', '☃️', '🥌', '⛸️', '🏂'],
+    emojis: ['🧊', '☃️', '🥌', '⛸️', '🏂', '🐧', '🌨️', '🦭', '⛷️'],
   },
 ]
 
@@ -95,7 +95,51 @@ const chooseWeighted = (items) => {
   return items[0]
 }
 
-const chooseContinent = () => {
+const reverseGeocode = async (lat, lon) => {
+  const params = {
+    latlng: `${lat},${lon}`,
+    result_type: 'locality|natural_feature|point_of_interest|administrative_area_level_1',
+  }
+
+  return new Promise((resolve, reject) => {
+    gmAPI.reverseGeocode(params, (err, result) => {
+      if (err) {
+        reject(err)
+        return
+      }
+      
+      if (!result || !result.results || result.results.length === 0) {
+        resolve(null)
+        return
+      }
+
+      // Get the first result
+      const place = result.results[0]
+      const components = place.address_components
+
+      // Extract useful parts
+      let locality = null
+      let area = null
+      let country = null
+
+      components.forEach(comp => {
+        if (comp.types.includes('locality')) {
+          locality = comp.long_name
+        }
+        if (comp.types.includes('administrative_area_level_1')) {
+          area = comp.long_name
+        }
+        if (comp.types.includes('country')) {
+          country = comp.long_name
+        }
+      })
+
+      resolve({ locality, area, country, formatted: place.formatted_address })
+    })
+  })
+}
+
+const chooseContinent = async () => {
   const continent = CONTINENTS[getRandomInt(CONTINENTS.length - 1)]
   const box = chooseWeighted(continent.boxes)
 
@@ -103,7 +147,29 @@ const chooseContinent = () => {
   const lon = randomFloat(box.lon[0], box.lon[1])
   const center = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
 
-  let status = `Somewhere in ${continent.name}`
+  // Try to get location info
+  let locationName = continent.name
+  try {
+    const geoData = await reverseGeocode(lat, lon)
+    if (geoData) {
+      // Build a nice location string
+      if (geoData.locality) {
+        locationName = `${geoData.locality}, ${geoData.country || continent.name}`
+      } else if (geoData.area) {
+        locationName = `${geoData.area}, ${geoData.country || continent.name}`
+      } else if (geoData.country) {
+        locationName = geoData.country
+      }
+      // For really remote areas, add flavor
+      if (!geoData.locality && !geoData.area) {
+        locationName = `Somewhere remote in ${geoData.country || continent.name}`
+      }
+    }
+  } catch (err) {
+    console.log('Reverse geocoding failed, using continent name:', err.message)
+  }
+
+  let status = `Somewhere near ${locationName}`
   status +=
     '\n\n' +
     center +
@@ -114,7 +180,7 @@ const chooseContinent = () => {
     emoji.random().emoji + ' ' +
     emoji.random().emoji
 
-  return { center, status, continent }
+  return { center, status, continent, locationName }
 }
 
 const downloadMap = async (center, maptype, zoom, imagePath) => {
@@ -205,7 +271,7 @@ const run = async () => {
 
   // Retry until satellite imagery exists
   while (!success) {
-    imageInfo = chooseContinent()
+    imageInfo = await chooseContinent()
     success = await downloadMap(
       imageInfo.center,
       'satellite',
