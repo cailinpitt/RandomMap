@@ -4,6 +4,7 @@ const randomFloat = require('random-float')
 const emoji = require('node-emoji')
 const GoogleMapsAPI = require('googlemaps')
 const { AtpAgent } = require('@atproto/api')
+const sharp = require('sharp')
 
 const { google, bluesky } = require('./keys.js')
 const {
@@ -19,6 +20,7 @@ const agent = new AtpAgent({
 
 const gmAPI = new GoogleMapsAPI(google)
 const assetDirectory = './assets/'
+const HISTORY_FILE = './location_history.json'
 
 /**
  * Weighted bounding boxes per continent
@@ -113,11 +115,9 @@ const reverseGeocode = async (lat, lon) => {
         return
       }
 
-      // Get the first result
       const place = result.results[0]
       const components = place.address_components
 
-      // Extract useful parts
       let locality = null
       let area = null
       let country = null
@@ -147,12 +147,10 @@ const chooseContinent = async () => {
   const lon = randomFloat(box.lon[0], box.lon[1])
   const center = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
 
-  // Try to get location info
   let locationName = continent.name
   try {
     const geoData = await reverseGeocode(lat, lon)
     if (geoData) {
-      // Build a nice location string
       if (geoData.locality) {
         locationName = `${geoData.locality}, ${geoData.country || continent.name}`
       } else if (geoData.area) {
@@ -160,7 +158,6 @@ const chooseContinent = async () => {
       } else if (geoData.country) {
         locationName = geoData.country
       }
-      // For really remote areas, add flavor
       if (!geoData.locality && !geoData.area) {
         locationName = `Somewhere remote in ${geoData.country || continent.name}`
       }
@@ -180,7 +177,134 @@ const chooseContinent = async () => {
     emoji.random().emoji + ' ' +
     emoji.random().emoji
 
-  return { center, status, continent, locationName }
+  return { center, status, continent, locationName, lat, lon }
+}
+
+const loadHistory = async () => {
+  try {
+    const data = await fs.readFile(HISTORY_FILE, 'utf8')
+    return JSON.parse(data)
+  } catch (err) {
+    return []
+  }
+}
+
+const saveHistory = async (history) => {
+  await fs.writeFile(HISTORY_FILE, JSON.stringify(history, null, 2))
+}
+
+const addToHistory = async (lat, lon, locationName) => {
+  const history = await loadHistory()
+  history.unshift({ lat, lon, locationName, timestamp: Date.now() })
+  
+  if (history.length > 8) {
+    history.length = 8
+  }
+  
+  await saveHistory(history)
+  return history
+}
+
+const createJourneyBanner = async (history) => {
+  if (history.length === 0) {
+    console.log('No history yet, skipping banner creation')
+    return
+  }
+
+  // Calculate the center and bounds of all markers
+  const lats = history.map(loc => loc.lat)
+  const lons = history.map(loc => loc.lon)
+  
+  const minLat = Math.min(...lats)
+  const maxLat = Math.max(...lats)
+  const minLon = Math.min(...lons)
+  const maxLon = Math.max(...lons)
+  
+  const centerLat = (minLat + maxLat) / 2
+  const centerLon = (minLon + maxLon) / 2
+  
+  // Add padding to ensure markers aren't cut off
+  const latPadding = (maxLat - minLat) * 0.3
+  const lonPadding = (maxLon - minLon) * 0.3
+
+  // Build markers manually for the URL
+  const colors = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'gray', 'gray']
+  const markerStrings = history.map((loc, idx) => {
+    const color = colors[idx] || 'gray'
+    const label = (idx + 1).toString()
+    return `markers=color:${color}%7Clabel:${label}%7C${loc.lat},${loc.lon}`
+  }).join('&')
+
+  // Specify visible region to ensure all markers are shown
+  const visibleRegion = `visible=${minLat - latPadding},${minLon - lonPadding}%7C${maxLat + latPadding},${maxLon + lonPadding}`
+
+  const baseUrl = 'https://maps.googleapis.com/maps/api/staticmap'
+  const params = [
+    'maptype=terrain',
+    'size=3000x1000',
+    'scale=1',
+    visibleRegion,
+    markerStrings,
+    `key=${google.key}`
+  ].join('&')
+
+  const journeyMapUrl = `${baseUrl}?${params}`
+
+  const journeyResponse = await axios({
+    url: journeyMapUrl,
+    method: 'GET',
+    responseType: 'arraybuffer',
+  })
+
+  await fs.writeFile(assetDirectory + 'banner_raw.png', journeyResponse.data)
+
+  // Resize to 2560x660 to fit properly, then center on 2560x2560 canvas
+  const resizedBanner = await sharp(assetDirectory + 'banner_raw.png')
+    .resize(2560, 660, { fit: 'cover', position: 'center' })
+    .toBuffer()
+
+  // Create the final banner as JPEG with compression to stay under 976KB
+  await sharp({
+    create: {
+      width: 2560,
+      height: 2560,
+      channels: 4,
+      background: { r: 230, g: 240, b: 245, alpha: 1 }
+    }
+  })
+  .composite([{
+    input: resizedBanner,
+    top: 950,
+    left: 0
+  }])
+  .jpeg({ quality: 85, progressive: true })
+  .toFile(assetDirectory + 'banner.jpg')
+}
+
+const updateProfileBanner = async (bannerPath) => {
+  const buffer = fs.readFileSync(bannerPath)
+
+  const { data } = await agent.uploadBlob(buffer, {
+    encoding: 'image/jpeg',
+  })
+
+  const { data: existing } = await agent.com.atproto.repo.getRecord({
+    repo: agent.assertDid,
+    collection: 'app.bsky.actor.profile',
+    rkey: 'self',
+  })
+
+  const profileRecord = existing.value || {}
+
+  await agent.com.atproto.repo.putRecord({
+    repo: agent.assertDid,
+    collection: 'app.bsky.actor.profile',
+    rkey: 'self',
+    record: {
+      ...profileRecord,
+      banner: data.blob,
+    },
+  })
 }
 
 const downloadMap = async (center, maptype, zoom, imagePath) => {
@@ -198,7 +322,6 @@ const downloadMap = async (center, maptype, zoom, imagePath) => {
     responseType: 'arraybuffer',
   })
 
-  // No-imagery tiles are tiny
   if (response.data.length < 20000) {
     return false
   }
@@ -217,7 +340,7 @@ const uploadImage = async (imagePath) => {
   }
 }
 
-const updateProfileImage = async (imagePath, chosenContinent) => {
+const updateProfileImage = async (imagePath, chosenContinent, history) => {
   const buffer = fs.readFileSync(imagePath)
 
   const { data } = await agent.uploadBlob(buffer, {
@@ -231,6 +354,17 @@ const updateProfileImage = async (imagePath, chosenContinent) => {
   })
 
   const profileRecord = existing.value || {}
+  
+  // Build description with recent journey
+  let description = `Currently somewhere in ${chosenContinent.name} ${chosenContinent.emojis[getRandomInt(chosenContinent.emojis.length - 1)]}`
+  
+  if (history.length > 0) {
+    const colors = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚫']
+    description += '\n\nRecent Journey:'
+    history.forEach((loc, idx) => {
+      description += `\n${colors[idx]} ${loc.locationName}`
+    })
+  }
 
   await agent.com.atproto.repo.putRecord({
     repo: agent.assertDid,
@@ -239,20 +373,45 @@ const updateProfileImage = async (imagePath, chosenContinent) => {
     record: {
       ...profileRecord,
       avatar: data.blob,
-      description: `Currently somewhere in ${chosenContinent.name} ${chosenContinent.emojis[getRandomInt(chosenContinent.emojis.length - 1)]}`
+      description: description,
     },
   })
 }
 
-const post = async (status) => {
+const post = async (status, lat, lon) => {
   const images = [
     await uploadImage(assetDirectory + 'satellite.png'),
     await uploadImage(assetDirectory + 'hybrid.png'),
     await uploadImage(assetDirectory + 'terrain.png'),
   ]
 
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`
+  const coordinates = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+  
+  const textBeforeCoords = status.split('\n\n')[0] + '\n\n'
+  const textAfterCoords = '\n\n' + status.split('\n\n').slice(2).join('\n\n')
+  
+  const fullText = textBeforeCoords + coordinates + textAfterCoords
+  
+  const byteStart = new TextEncoder().encode(textBeforeCoords).length
+  const byteEnd = byteStart + new TextEncoder().encode(coordinates).length
+
   await makePost(agent, {
-    text: status,
+    text: fullText,
+    facets: [
+      {
+        index: {
+          byteStart,
+          byteEnd,
+        },
+        features: [
+          {
+            $type: 'app.bsky.richtext.facet#link',
+            uri: mapsUrl,
+          },
+        ],
+      },
+    ],
     embed: { $type: 'app.bsky.embed.images', images },
     createdAt: new Date().toISOString(),
   })
@@ -269,7 +428,6 @@ const run = async () => {
   let imageInfo
   let success = false
 
-  // Retry until satellite imagery exists
   while (!success) {
     imageInfo = await chooseContinent()
     success = await downloadMap(
@@ -294,8 +452,16 @@ const run = async () => {
     assetDirectory + 'terrain.png'
   )
 
-  await updateProfileImage(assetDirectory + 'satellite.png', imageInfo.continent)
-  await post(imageInfo.status)
+  const history = await addToHistory(imageInfo.lat, imageInfo.lon, imageInfo.locationName)
+  await createJourneyBanner(history)
+
+  await updateProfileImage(assetDirectory + 'satellite.png', imageInfo.continent, history)
+  
+  if (history.length > 0) {
+    await updateProfileBanner(assetDirectory + 'banner.jpg')
+  }
+  
+  await post(imageInfo.status, imageInfo.lat, imageInfo.lon)
 }
 
 run().catch(console.error)

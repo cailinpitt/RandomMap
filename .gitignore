@@ -13,9 +13,6 @@
 #Ignore yml files
 *.yml
 
-#Ignore PNG files
-*.png
-
 node_modules/
 
 *.icloud
@@ -25,3 +22,7 @@ node_modules/
 keys.js
 
 yarn.lock
+
+location_history.json
+
+assets/
