@@ -32,6 +32,7 @@ const CONTINENTS = [
       { lat: [43, 60], lon: [-130, -60], weight: 2 }, // Canada
       { lat: [15, 25], lon: [-100, -75], weight: 1 }, // Central America
     ],
+    emojis: ['🌎', '🍔', '🏈', '🍿', '🐕'],
   },
   {
     name: 'South America',
@@ -39,6 +40,7 @@ const CONTINENTS = [
       { lat: [-35, 5], lon: [-75, -35], weight: 4 }, // Brazil / Andes coast
       { lat: [-55, -15], lon: [-75, -60], weight: 1 }, // Patagonia
     ],
+    emojis: ['🌎', '⚽️', '🏊', '🌮', '🌯',],
   },
   {
     name: 'Europe',
@@ -47,6 +49,7 @@ const CONTINENTS = [
       { lat: [55, 70], lon: [10, 40], weight: 2 }, // Scandinavia
       { lat: [45, 55], lon: [30, 60], weight: 1 }, // Eastern Europe
     ],
+    emojis: ['🌍', '⚽️', '💶', '🚲', '🍝'],
   },
   {
     name: 'Africa',
@@ -55,6 +58,7 @@ const CONTINENTS = [
       { lat: [5, 35], lon: [-10, 35], weight: 3 }, // North / West Africa
       { lat: [-5, 15], lon: [35, 50], weight: 1 }, // Horn of Africa
     ],
+    emojis: ['🌍', '🐘', '🦒', '🌊', '🍗'],
   },
   {
     name: 'Asia',
@@ -63,6 +67,7 @@ const CONTINENTS = [
       { lat: [10, 30], lon: [70, 90], weight: 3 }, // India / SE Asia
       { lat: [40, 60], lon: [60, 100], weight: 1 }, // Central Asia
     ],
+    emojis: ['🌏', '🚄', '🍜', '🥟'],
   },
   {
     name: 'Australia',
@@ -70,12 +75,14 @@ const CONTINENTS = [
       { lat: [-38, -12], lon: [113, 153], weight: 4 }, // Coastal AU
       { lat: [-30, -20], lon: [120, 135], weight: 1 }, // Interior
     ],
+    emojis: ['🐨', '🦘', '🌏', '♨️', '🏜️'],
   },
   {
     name: 'Antarctica',
     boxes: [
       { lat: [-90, -65], lon: [-180, 180], weight: 1 },
     ],
+    emojis: ['🧊', '☃️', '🥌', '⛸️', '🏂'],
   },
 ]
 
@@ -107,7 +114,7 @@ const chooseContinent = () => {
     emoji.random().emoji + ' ' +
     emoji.random().emoji
 
-  return { center, status }
+  return { center, status, continent }
 }
 
 const downloadMap = async (center, maptype, zoom, imagePath) => {
@@ -144,6 +151,33 @@ const uploadImage = async (imagePath) => {
   }
 }
 
+const updateProfileImage = async (imagePath, chosenContinent) => {
+  const buffer = fs.readFileSync(imagePath)
+
+  const { data } = await agent.uploadBlob(buffer, {
+    encoding: 'image/png',
+  })
+
+  const { data: existing } = await agent.com.atproto.repo.getRecord({
+    repo: agent.assertDid,
+    collection: 'app.bsky.actor.profile',
+    rkey: 'self',
+  })
+
+  const profileRecord = existing.value || {}
+
+  await agent.com.atproto.repo.putRecord({
+    repo: agent.assertDid,
+    collection: 'app.bsky.actor.profile',
+    rkey: 'self',
+    record: {
+      ...profileRecord,
+      avatar: data.blob,
+      description: `Currently somewhere in ${chosenContinent.name} ${chosenContinent.emojis[getRandomInt(chosenContinent.emojis.length - 1)]}`
+    },
+  })
+}
+
 const post = async (status) => {
   const images = [
     await uploadImage(assetDirectory + 'satellite.png'),
@@ -159,6 +193,8 @@ const post = async (status) => {
 }
 
 const run = async () => {
+  cleanup(assetDirectory)
+
   await agent.login(bluesky)
   fs.ensureDirSync(assetDirectory)
 
@@ -192,8 +228,8 @@ const run = async () => {
     assetDirectory + 'terrain.png'
   )
 
+  await updateProfileImage(assetDirectory + 'satellite.png', imageInfo.continent)
   await post(imageInfo.status)
-  cleanup(assetDirectory)
 }
 
 run().catch(console.error)
