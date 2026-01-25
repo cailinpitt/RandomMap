@@ -25,9 +25,15 @@ const makePost = async (agent, record) => {
   return agent.post(record)
 }
 
+/**
+ * Sleep for a specified amount of seconds
+ */
+const sleep = async (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 module.exports = {
   cleanup,
   getRandomInt,
   getRandomIntInRange,
   makePost,
+  sleep,
 }

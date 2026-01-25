@@ -12,6 +12,7 @@ const {
   getRandomInt,
   getRandomIntInRange,
   makePost,
+  sleep,
 } = require('./util.js')
 
 const agent = new AtpAgent({
@@ -374,8 +375,15 @@ const updateProfileImage = async (imagePath, chosenContinent, history) => {
     const colors = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚫']
     description += '\n\nRecent Journey:'
     history.forEach((loc, idx) => {
-      description += `\n${colors[idx]} ${loc.locationName}`
+      const nextLine = `\n${colors[idx]} ${loc.locationName}`
+      if (description.length + nextLine.length <= 253) { // 253 to leave room for "..." when we need to truncate
+        description += nextLine
+      }
     })
+  }
+
+  if (description.length > 256) {
+    description = description.substring(0, 253) + '...'
   }
 
   await agent.com.atproto.repo.putRecord({
@@ -439,8 +447,10 @@ const run = async () => {
 
   let imageInfo
   let success = false
+  let retryCount = 0
 
-  while (!success) {
+  while (!success && retryCount < 5) {
+    console.log(`Downloading satellite map, retry ${retryCount}...`)
     imageInfo = await chooseContinent()
     success = await downloadMap(
       imageInfo.center,
@@ -450,6 +460,9 @@ const run = async () => {
     )
     if (!success) {
       console.log('No satellite imagery at this location, trying another...')
+      retryCount++
+      sleep(2)
+      
       continue
     }
 
@@ -473,8 +486,12 @@ const run = async () => {
     if (!hybridSuccess || !terrainSuccess) {
       console.log('Hybrid or terrain map unavailable, trying another location...')
       success = false
+      retryCount++
+      sleep(2)
     }
   }
+
+  await post(imageInfo.status, imageInfo.lat, imageInfo.lon)
 
   const history = await addToHistory(imageInfo.lat, imageInfo.lon, imageInfo.locationName)
   await createJourneyBanner(history)
@@ -484,8 +501,6 @@ const run = async () => {
   if (history.length > 0) {
     await updateProfileBanner(assetDirectory + 'banner.jpg')
   }
-  
-  await post(imageInfo.status, imageInfo.lat, imageInfo.lon)
 }
 
 run().catch(console.error)
