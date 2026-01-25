@@ -1,6 +1,5 @@
 const fs = require('fs-extra')
 const axios = require('axios')
-const path = require('path')
 const randomFloat = require('random-float')
 const emoji = require('node-emoji')
 const GoogleMapsAPI = require('googlemaps')
@@ -21,37 +20,83 @@ const agent = new AtpAgent({
 const gmAPI = new GoogleMapsAPI(google)
 const assetDirectory = './assets/'
 
-const chooseContinent = () => {
-  let center
-  const continent = getRandomInt(5)
-  let status = 'Somewhere in'
+/**
+ * Weighted bounding boxes per continent
+ * Coastal / populated regions get higher weight
+ */
+const CONTINENTS = [
+  {
+    name: 'North America',
+    boxes: [
+      { lat: [25, 49], lon: [-125, -67], weight: 4 }, // US / Mexico populated
+      { lat: [43, 60], lon: [-130, -60], weight: 2 }, // Canada
+      { lat: [15, 25], lon: [-100, -75], weight: 1 }, // Central America
+    ],
+  },
+  {
+    name: 'South America',
+    boxes: [
+      { lat: [-35, 5], lon: [-75, -35], weight: 4 }, // Brazil / Andes coast
+      { lat: [-55, -15], lon: [-75, -60], weight: 1 }, // Patagonia
+    ],
+  },
+  {
+    name: 'Europe',
+    boxes: [
+      { lat: [40, 55], lon: [-5, 30], weight: 5 }, // Western / Central Europe
+      { lat: [55, 70], lon: [10, 40], weight: 2 }, // Scandinavia
+      { lat: [45, 55], lon: [30, 60], weight: 1 }, // Eastern Europe
+    ],
+  },
+  {
+    name: 'Africa',
+    boxes: [
+      { lat: [-35, 5], lon: [10, 40], weight: 3 }, // Southern / East Africa
+      { lat: [5, 35], lon: [-10, 35], weight: 3 }, // North / West Africa
+      { lat: [-5, 15], lon: [35, 50], weight: 1 }, // Horn of Africa
+    ],
+  },
+  {
+    name: 'Asia',
+    boxes: [
+      { lat: [20, 45], lon: [100, 145], weight: 4 }, // East Asia
+      { lat: [10, 30], lon: [70, 90], weight: 3 }, // India / SE Asia
+      { lat: [40, 60], lon: [60, 100], weight: 1 }, // Central Asia
+    ],
+  },
+  {
+    name: 'Australia',
+    boxes: [
+      { lat: [-38, -12], lon: [113, 153], weight: 4 }, // Coastal AU
+      { lat: [-30, -20], lon: [120, 135], weight: 1 }, // Interior
+    ],
+  },
+  {
+    name: 'Antarctica',
+    boxes: [
+      { lat: [-90, -65], lon: [-180, 180], weight: 1 },
+    ],
+  },
+]
 
-  switch (continent) {
-    case 0:
-      center = `${randomFloat(30.2, 50)}, ${randomFloat(-118.7, -76.6)}`
-      status += ' North America'
-      break
-    case 1:
-      center = `${randomFloat(-13.9, 1.4)}, ${randomFloat(-75.3, -39.7)}`
-      status += ' South America'
-      break
-    case 2:
-      center = `${randomFloat(-19.9, 21.3)}, ${randomFloat(14.4, 34.2)}`
-      status += ' Africa'
-      break
-    case 3:
-      center = `${randomFloat(43.0, 48)}, ${randomFloat(2.5, 44.6)}`
-      status += ' Europe'
-      break
-    case 4:
-      center = `${randomFloat(21.2, 49.7)}, ${randomFloat(70, 106)}`
-      status += ' Asia'
-      break
-    default:
-      center = `${randomFloat(-31.6, -20.6)}, ${randomFloat(116.1, 145.2)}`
-      status += ' Australia'
+const chooseWeighted = (items) => {
+  const total = items.reduce((sum, i) => sum + i.weight, 0)
+  let r = Math.random() * total
+  for (const item of items) {
+    if ((r -= item.weight) <= 0) return item
   }
+  return items[0]
+}
 
+const chooseContinent = () => {
+  const continent = CONTINENTS[getRandomInt(CONTINENTS.length - 1)]
+  const box = chooseWeighted(continent.boxes)
+
+  const lat = randomFloat(box.lat[0], box.lat[1])
+  const lon = randomFloat(box.lon[0], box.lon[1])
+  const center = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+
+  let status = `Somewhere in ${continent.name}`
   status +=
     '\n\n' +
     center +
@@ -66,16 +111,13 @@ const chooseContinent = () => {
 }
 
 const downloadMap = async (center, maptype, zoom, imagePath) => {
-  const imageParams = {
+  const imageURL = gmAPI.staticMap({
     center,
     zoom,
     maptype,
     size: '1024x1024',
     scale: 1,
-  }
-
-  const imageURL = gmAPI.staticMap(imageParams)
-  const image = path.resolve(imagePath)
+  })
 
   const response = await axios({
     url: imageURL,
@@ -83,15 +125,18 @@ const downloadMap = async (center, maptype, zoom, imagePath) => {
     responseType: 'arraybuffer',
   })
 
-  await fs.writeFile(image, response.data)
+  // No-imagery tiles are tiny
+  if (response.data.length < 20000) {
+    return false
+  }
+
+  await fs.writeFile(imagePath, response.data)
+  return true
 }
 
 const uploadImage = async (imagePath) => {
   const buffer = fs.readFileSync(imagePath)
-
-  const { data } = await agent.uploadBlob(buffer, {
-    encoding: 'image/png',
-  })
+  const { data } = await agent.uploadBlob(buffer, { encoding: 'image/png' })
 
   return {
     image: data.blob,
@@ -100,37 +145,54 @@ const uploadImage = async (imagePath) => {
 }
 
 const post = async (status) => {
-  const images = []
-
-  images.push(await uploadImage(assetDirectory + 'satellite.png'))
-  images.push(await uploadImage(assetDirectory + 'terrain.png'))
+  const images = [
+    await uploadImage(assetDirectory + 'satellite.png'),
+    await uploadImage(assetDirectory + 'hybrid.png'),
+    await uploadImage(assetDirectory + 'terrain.png'),
+  ]
 
   await makePost(agent, {
     text: status,
-    embed: {
-      $type: 'app.bsky.embed.images',
-      images,
-    },
+    embed: { $type: 'app.bsky.embed.images', images },
     createdAt: new Date().toISOString(),
   })
 }
 
 const run = async () => {
-  await agent.login({
-    identifier: bluesky.identifier,
-    password: bluesky.password,
-  })
-
+  await agent.login(bluesky)
   fs.ensureDirSync(assetDirectory)
 
-  const imageInfo = chooseContinent()
   const zoom = getRandomIntInRange(11, 15)
 
-  await downloadMap(imageInfo.center, 'satellite', zoom, assetDirectory + 'satellite.png')
-  await downloadMap(imageInfo.center, 'terrain', zoom, assetDirectory + 'terrain.png')
+  let imageInfo
+  let success = false
+
+  // Retry until satellite imagery exists
+  while (!success) {
+    imageInfo = chooseContinent()
+    success = await downloadMap(
+      imageInfo.center,
+      'satellite',
+      zoom,
+      assetDirectory + 'satellite.png'
+    )
+  }
+
+  await downloadMap(
+    imageInfo.center,
+    'hybrid',
+    zoom,
+    assetDirectory + 'hybrid.png'
+  )
+
+  await downloadMap(
+    imageInfo.center,
+    'terrain',
+    zoom,
+    assetDirectory + 'terrain.png'
+  )
 
   await post(imageInfo.status)
-
   cleanup(assetDirectory)
 }
 
