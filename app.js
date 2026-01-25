@@ -211,6 +211,11 @@ const createJourneyBanner = async (history) => {
     return
   }
 
+  console.log(`Creating journey banner with ${history.length} locations:`)
+  history.forEach((loc, idx) => {
+    console.log(`  ${idx + 1}. ${loc.locationName} (${loc.lat}, ${loc.lon})`)
+  })
+
   // Calculate the center and bounds of all markers
   const lats = history.map(loc => loc.lat)
   const lons = history.map(loc => loc.lon)
@@ -226,6 +231,9 @@ const createJourneyBanner = async (history) => {
   // Add padding to ensure markers aren't cut off
   const latPadding = (maxLat - minLat) * 0.3
   const lonPadding = (maxLon - minLon) * 0.3
+
+  console.log(`Bounds: lat [${minLat}, ${maxLat}], lon [${minLon}, ${maxLon}]`)
+  console.log(`Center: ${centerLat}, ${centerLon}`)
 
   // Build markers manually for the URL
   const colors = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'gray', 'gray']
@@ -249,6 +257,8 @@ const createJourneyBanner = async (history) => {
   ].join('&')
 
   const journeyMapUrl = `${baseUrl}?${params}`
+
+  console.log('Journey map URL:', journeyMapUrl)
 
   const journeyResponse = await axios({
     url: journeyMapUrl,
@@ -279,6 +289,8 @@ const createJourneyBanner = async (history) => {
   }])
   .jpeg({ quality: 85, progressive: true })
   .toFile(assetDirectory + 'banner.jpg')
+
+  console.log('Banner saved successfully (centered in 2560x2560 canvas)')
 }
 
 const updateProfileBanner = async (bannerPath) => {
@@ -436,21 +448,33 @@ const run = async () => {
       zoom,
       assetDirectory + 'satellite.png'
     )
+    if (!success) {
+      console.log('No satellite imagery at this location, trying another...')
+      continue
+    }
+
+    // Also verify hybrid and terrain maps exist before proceeding
+    console.log('Downloading hybrid map...')
+    const hybridSuccess = await downloadMap(
+      imageInfo.center,
+      'hybrid',
+      zoom,
+      assetDirectory + 'hybrid.png'
+    )
+
+    console.log('Downloading terrain map...')
+    const terrainSuccess = await downloadMap(
+      imageInfo.center,
+      'terrain',
+      zoom,
+      assetDirectory + 'terrain.png'
+    )
+
+    if (!hybridSuccess || !terrainSuccess) {
+      console.log('Hybrid or terrain map unavailable, trying another location...')
+      success = false
+    }
   }
-
-  await downloadMap(
-    imageInfo.center,
-    'hybrid',
-    zoom,
-    assetDirectory + 'hybrid.png'
-  )
-
-  await downloadMap(
-    imageInfo.center,
-    'terrain',
-    zoom,
-    assetDirectory + 'terrain.png'
-  )
 
   const history = await addToHistory(imageInfo.lat, imageInfo.lon, imageInfo.locationName)
   await createJourneyBanner(history)
