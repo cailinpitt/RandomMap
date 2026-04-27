@@ -1,0 +1,13 @@
+# RandomMap crontab — source of truth.
+# Append between # RANDOMMAP-START / # RANDOMMAP-END markers in the live
+# crontab. Don't `crontab cron/crontab.txt` directly — that wipes any
+# other unrelated jobs.
+
+R=/home/cailin/Development/RandomMap
+
+# RANDOMMAP-START
+
+# Post a random aerial image every hour at :45.
+45 * * * * cd $R && { printf '\n\n=== %s ===\n' "$(date)"; npm run local; } >> cron.log 2>&1
+
+# RANDOMMAP-END
