@@ -8,6 +8,6 @@ R=/home/cailin/Development/RandomMap
 # RANDOMMAP-START
 
 # Post a random aerial image every hour at :45.
-45 * * * * cd $R && { printf '\n\n=== %s ===\n' "$(date)"; npm run local; } >> cron.log 2>&1
+45 * * * * cd $R && { printf '\n\n=== %s ===\n' "$(date)"; node app.js; } >> cron.log 2>&1
 
 # RANDOMMAP-END
