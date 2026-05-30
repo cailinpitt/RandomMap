@@ -22,6 +22,11 @@ const agent = new AtpAgent({
 const gmAPI = new GoogleMapsAPI(google)
 const assetDirectory = './assets/'
 const HISTORY_FILE = './location_history.json'
+const BANNER_STATE_FILE = './banner_state.json'
+// The journey banner is a large Static Maps request rebuilt from history. The
+// journey only changes by one point per run, so rebuild it once every N runs
+// instead of every run to cut Static Maps usage.
+const BANNER_REBUILD_EVERY = 4
 
 /**
  * Weighted bounding boxes per continent
@@ -140,13 +145,25 @@ const reverseGeocode = async (lat, lon) => {
   })
 }
 
-const chooseContinent = async () => {
+// Pick a random weighted location. No geocoding happens here — many of these
+// points land in the ocean and get discarded by the imagery check, so we defer
+// the (billed) reverse-geocode until a location is confirmed to have imagery.
+const chooseLocation = () => {
   const continent = CONTINENTS[getRandomInt(CONTINENTS.length - 1)]
   const box = chooseWeighted(continent.boxes)
 
   const lat = randomFloat(box.lat[0], box.lat[1])
   const lon = randomFloat(box.lon[0], box.lon[1])
   const center = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+
+  return { center, continent, lat, lon }
+}
+
+// Reverse-geocode a confirmed location into a human-readable status. Only
+// called once imagery is verified, so we never spend geocoding quota on points
+// that get thrown away.
+const buildStatus = async (location) => {
+  const { lat, lon, center, continent } = location
 
   let locationName = continent.name
   try {
@@ -178,7 +195,7 @@ const chooseContinent = async () => {
     emoji.random().emoji + ' ' +
     emoji.random().emoji
 
-  return { center, status, continent, locationName, lat, lon }
+  return { status, locationName }
 }
 
 const loadHistory = async () => {
@@ -204,6 +221,26 @@ const addToHistory = async (lat, lon, locationName) => {
   
   await saveHistory(history)
   return history
+}
+
+// Returns true when the profile banner is due for a rebuild, advancing (and
+// persisting) the run counter. Lets us skip the banner's Static Maps request on
+// most runs; the Bluesky profile keeps the last banner we uploaded in between.
+const bannerRebuildDue = async () => {
+  let runsSinceBanner = BANNER_REBUILD_EVERY // no state yet → treat as due
+  try {
+    const data = await fs.readFile(BANNER_STATE_FILE, 'utf8')
+    runsSinceBanner = JSON.parse(data).runsSinceBanner + 1
+  } catch (err) {
+    // no state file yet — fall through and rebuild
+  }
+
+  const due = runsSinceBanner >= BANNER_REBUILD_EVERY
+  await fs.writeFile(
+    BANNER_STATE_FILE,
+    JSON.stringify({ runsSinceBanner: due ? 0 : runsSinceBanner }, null, 2)
+  )
+  return due
 }
 
 const createJourneyBanner = async (history) => {
@@ -445,15 +482,15 @@ const run = async () => {
 
   const zoom = getRandomIntInRange(11, 15)
 
-  let imageInfo
+  let location
   let success = false
   let retryCount = 0
 
   while (!success && retryCount < 5) {
     console.log(`Downloading satellite map, retry ${retryCount}...`)
-    imageInfo = await chooseContinent()
+    location = chooseLocation()
     success = await downloadMap(
-      imageInfo.center,
+      location.center,
       'satellite',
       zoom,
       assetDirectory + 'satellite.png'
@@ -462,14 +499,14 @@ const run = async () => {
       console.log('No satellite imagery at this location, trying another...')
       retryCount++
       sleep(2)
-      
+
       continue
     }
 
     // Also verify hybrid and terrain maps exist before proceeding
     console.log('Downloading hybrid map...')
     const hybridSuccess = await downloadMap(
-      imageInfo.center,
+      location.center,
       'hybrid',
       zoom,
       assetDirectory + 'hybrid.png'
@@ -477,7 +514,7 @@ const run = async () => {
 
     console.log('Downloading terrain map...')
     const terrainSuccess = await downloadMap(
-      imageInfo.center,
+      location.center,
       'terrain',
       zoom,
       assetDirectory + 'terrain.png'
@@ -491,14 +528,23 @@ const run = async () => {
     }
   }
 
+  if (!success) {
+    console.log('No location with full imagery after retries, aborting run')
+    return
+  }
+
+  // Imagery is confirmed — now spend a single geocoding call to name it.
+  const { status, locationName } = await buildStatus(location)
+  const imageInfo = { ...location, status, locationName }
+
   await post(imageInfo.status, imageInfo.lat, imageInfo.lon)
 
   const history = await addToHistory(imageInfo.lat, imageInfo.lon, imageInfo.locationName)
-  await createJourneyBanner(history)
 
   await updateProfileImage(assetDirectory + 'satellite.png', imageInfo.continent, history)
-  
-  if (history.length > 0) {
+
+  if (history.length > 0 && await bannerRebuildDue()) {
+    await createJourneyBanner(history)
     await updateProfileBanner(assetDirectory + 'banner.jpg')
   }
 }
